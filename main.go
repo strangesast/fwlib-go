@@ -44,6 +44,16 @@ typedef struct odbdy2_t {
         } oaxis ;
     } pos ;
 } ODBDY2_T ;
+
+typedef struct odbdy2_t_oaxis {
+  struct {
+      int32_t absolute[MAX_AXIS] ;
+      int32_t machine[MAX_AXIS] ;
+      int32_t relative[MAX_AXIS] ;
+      int32_t distance[MAX_AXIS] ;
+  } faxis ;
+} ODBDY2_T_OAXIS;
+
 */
 import "C"
 
@@ -71,9 +81,12 @@ func read_id(libh C.ushort) sig {
 			return errors.New(fmt.Sprintf("cnc_rdcncid failed (%d)", ret))
 		}
 		value := fmt.Sprintf("%08x-%08x-%08x-%08x", cnc_ids[0], cnc_ids[1], cnc_ids[2], cnc_ids[3])
-		(*b)["id"] = value
-
-		*c = append(*c, Update{"id", value})
+		const key = "id"
+		last, ok := (*a)[key]
+		if !ok || last != value {
+			(*b)[key] = value
+			*c = append(*c, Update{"id", value})
+		}
 
 		return nil
 	}
@@ -340,7 +353,66 @@ func read_dynamic(libh C.ushort) sig {
 				*c = append(*c, Update{key, value})
 			}
 		}
-		// pos
+		{
+			oaxis := *(*C.ODBDY2_T_OAXIS)(unsafe.Pointer(&dyn.pos[0]))
+			l := C.MAX_AXIS
+			if axis_names, ok := (*a)["axis_names"].([]string); ok {
+				l = len(axis_names)
+			}
+			if axis_names, ok := (*b)["axis_names"].([]string); ok {
+				l = len(axis_names)
+			}
+			absolute := make([]int, l)
+			distance := make([]int, l)
+			machine := make([]int, l)
+			relative := make([]int, l)
+			for i := 0; i < l; i++ {
+				absolute[i] = int(oaxis.faxis.absolute[i])
+				distance[i] = int(oaxis.faxis.distance[i])
+				machine[i] = int(oaxis.faxis.machine[i])
+				relative[i] = int(oaxis.faxis.relative[i])
+			}
+			{
+				last, ok := (*a)["absolute"].([]int)
+				for j := 0; ok && j < l; j++ {
+					ok = last[j] == absolute[j]
+				}
+				if !ok {
+					(*b)["absolute"] = absolute
+					*c = append(*c, Update{"absolute", absolute})
+				}
+			}
+			{
+				last, ok := (*a)["distance"].([]int)
+				for j := 0; ok && j < l; j++ {
+					ok = last[j] == distance[j]
+				}
+				if !ok {
+					(*b)["distance"] = distance
+					*c = append(*c, Update{"distance", distance})
+				}
+			}
+			{
+				last, ok := (*a)["machine"].([]int)
+				for j := 0; ok && j < l; j++ {
+					ok = last[j] == machine[j]
+				}
+				if !ok {
+					(*b)["machine"] = machine
+					*c = append(*c, Update{"machine", machine})
+				}
+			}
+			{
+				last, ok := (*a)["relative"].([]int)
+				for j := 0; ok && j < l; j++ {
+					ok = last[j] == relative[j]
+				}
+				if !ok {
+					(*b)["relative"] = relative
+					*c = append(*c, Update{"relative", relative})
+				}
+			}
+		}
 
 		return nil
 	}
@@ -384,6 +456,12 @@ func main() {
 	b := make(map[string]interface{})
 	var c []Update
 
+	for _, each := range fns {
+		each(&a, &b, &c)
+	}
+	a = b
+	b = make(map[string]interface{})
+	c = c[:0]
 	for _, each := range fns {
 		each(&a, &b, &c)
 	}
