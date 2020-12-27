@@ -21,26 +21,26 @@ typedef struct iodbpsd_t {
 } iodbpsd_t ;
 
 typedef struct odbdy2_t {
-    short   dummy ;
-    short   axis ;
-    long    alarm ;
-    long    prgnum ;
-    long    prgmnum ;
-    long    seqnum ;
-    long    actf ;
-    long    acts ;
+    int16_t dummy ;
+    int16_t axis ;
+    int32_t alarm ;
+    int32_t prgnum ;
+    int32_t prgmnum ;
+    int32_t seqnum ;
+    int32_t actf ;
+    int32_t acts ;
     union {
         struct {
-            long    absolute[MAX_AXIS] ;
-            long    machine[MAX_AXIS] ;
-            long    relative[MAX_AXIS] ;
-            long    distance[MAX_AXIS] ;
+            int32_t absolute[MAX_AXIS] ;
+            int32_t machine[MAX_AXIS] ;
+            int32_t relative[MAX_AXIS] ;
+            int32_t distance[MAX_AXIS] ;
         } faxis ;
         struct {
-            long    absolute ;
-            long    machine ;
-            long    relative ;
-            long    distance ;
+            int32_t absolute ;
+            int32_t machine ;
+            int32_t relative ;
+            int32_t distance ;
         } oaxis ;
     } pos ;
 } ODBDY2_T ;
@@ -52,6 +52,7 @@ import (
 	// 	"go.uber.org/config"
 	// 	"gopkg.in/confluentinc/confluent-kafka-go.v1/kafka"
 	"errors"
+	"github.com/kr/pretty"
 	"log"
 	"unsafe"
 )
@@ -78,18 +79,19 @@ func read_id(libh C.ushort) sig {
 	}
 }
 
-func read_parameter(libh C.ushort, key string, num int) sig {
+func read_parameter(libh C.ushort, key string, num int, ex interface{}) sig {
 	return func(a *map[string]interface{}, b *map[string]interface{}, c *[]Update) error {
 		var param C.iodbpsd_t
 
 		if ret := C.cnc_rdparam(libh, (C.short)(num), C.ALL_AXES, 8, (*C.IODBPSD)(unsafe.Pointer(&param))); ret != C.EW_OK {
 			return errors.New(fmt.Sprintf("cnc_rdparam failed (%d)", ret))
 		}
-		last := (*a)[key]
-		switch last.(type) {
+		last, ok := (*a)[key]
+		switch ex.(type) {
 		case C.long:
-			value := *(*C.long)(unsafe.Pointer(&param.u))
-			if last != value {
+			ptr := (*C.long)(unsafe.Pointer(&param.u))
+			value := int(*ptr)
+			if !ok || last != value {
 				(*b)[key] = value
 				*c = append(*c, Update{key, value})
 			}
@@ -293,6 +295,53 @@ func read_dynamic(libh C.ushort) sig {
 			return errors.New(fmt.Sprintf("cnc_rddynamic2 failed (%d)", ret))
 		}
 
+		{
+			const key = "actf"
+			last, ok := (*a)[key]
+			value := int(dyn.actf)
+			if !ok || last != value {
+				(*b)[key] = value
+				*c = append(*c, Update{key, value})
+			}
+		}
+		{
+			const key = "acts"
+			last, ok := (*a)[key]
+			value := int(dyn.acts)
+			if !ok || last != value {
+				(*b)[key] = value
+				*c = append(*c, Update{key, value})
+			}
+		}
+		{
+			const key = "prgmnum"
+			last, ok := (*a)[key]
+			value := int(dyn.prgmnum)
+			if !ok || last != value {
+				(*b)[key] = value
+				*c = append(*c, Update{key, value})
+			}
+		}
+		{
+			const key = "prgnum"
+			last, ok := (*a)[key]
+			value := int(dyn.prgnum)
+			if !ok || last != value {
+				(*b)[key] = value
+				*c = append(*c, Update{key, value})
+			}
+		}
+		{
+			const key = "seqnum"
+			last, ok := (*a)[key]
+			value := int(dyn.seqnum)
+			if !ok || last != value {
+				(*b)[key] = value
+				*c = append(*c, Update{key, value})
+			}
+		}
+		// pos
+
 		return nil
 	}
 }
@@ -306,11 +355,14 @@ func main() {
 		log.Fatalf("cnc_startupprocess failed (%d)\n", ret)
 	}
 
-	ip := C.CString("localhost")
-	defer C.free(unsafe.Pointer(ip))
-	port := (C.ushort)(8193)
+	ip := "localhost"
+	port := 8193
+	_ip := C.CString(ip)
+	defer C.free(unsafe.Pointer(_ip))
+	_port := (C.ushort)(port)
 
-	if ret := C.cnc_allclibhndl3(ip, port, 10, &libh); ret != C.EW_OK {
+	log.Printf("connecting to %s:%d...\n", ip, port)
+	if ret := C.cnc_allclibhndl3(_ip, _port, 10, &libh); ret != C.EW_OK {
 		log.Fatalf("cnc_allclibhndl3 failed (%d)\n", ret)
 	}
 
@@ -321,30 +373,24 @@ func main() {
 
 	fns := []sig{
 		read_id(libh),
-		read_parameter(libh, "part_count", PART_COUNT_PARAMETER),
+		read_parameter(libh, "part_count", PART_COUNT_PARAMETER, C.long(0)),
 		read_machine_info(libh),
 		read_axis_names(libh),
 		read_status(libh),
+		read_dynamic(libh),
 	}
 
 	a := make(map[string]interface{})
-	a["part_count"] = (C.long)(0)
 	b := make(map[string]interface{})
 	var c []Update
 
 	for _, each := range fns {
 		each(&a, &b, &c)
 	}
-	a = b
-	b = make(map[string]interface{})
-	c = c[:0]
-	for _, each := range fns {
-		each(&a, &b, &c)
-	}
 
-	fmt.Printf("a: %+v\n", a)
-	fmt.Printf("b: %+v\n", b)
-	fmt.Printf("c: %+v\n", c)
+	fmt.Printf("a: %# v\n", pretty.Formatter(a))
+	fmt.Printf("b: %# v\n", pretty.Formatter(b))
+	fmt.Printf("c: %# v\n", pretty.Formatter(c))
 
 	if ret := C.cnc_freelibhndl(libh); ret != C.EW_OK {
 		log.Fatalf("cnc_freelibhndl failed (%d)\n", ret)
