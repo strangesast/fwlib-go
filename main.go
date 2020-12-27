@@ -19,6 +19,31 @@ typedef struct iodbpsd_t {
         int32_t ldatas[MAX_AXIS] ;
     } u ;
 } iodbpsd_t ;
+
+typedef struct odbdy2_t {
+    short   dummy ;
+    short   axis ;
+    long    alarm ;
+    long    prgnum ;
+    long    prgmnum ;
+    long    seqnum ;
+    long    actf ;
+    long    acts ;
+    union {
+        struct {
+            long    absolute[MAX_AXIS] ;
+            long    machine[MAX_AXIS] ;
+            long    relative[MAX_AXIS] ;
+            long    distance[MAX_AXIS] ;
+        } faxis ;
+        struct {
+            long    absolute ;
+            long    machine ;
+            long    relative ;
+            long    distance ;
+        } oaxis ;
+    } pos ;
+} ODBDY2_T ;
 */
 import "C"
 
@@ -32,6 +57,7 @@ import (
 )
 
 type Update struct {
+	Key   string
 	Value interface{}
 }
 
@@ -43,10 +69,10 @@ func read_id(libh C.ushort) sig {
 		if ret := C.cnc_rdcncid(libh, (*C.ulong)(unsafe.Pointer(&cnc_ids[0]))); ret != C.EW_OK {
 			return errors.New(fmt.Sprintf("cnc_rdcncid failed (%d)", ret))
 		}
-		value := fmt.Sprintf("%08x-%08x-%08x-%08x\n", cnc_ids[0], cnc_ids[1], cnc_ids[2], cnc_ids[3])
+		value := fmt.Sprintf("%08x-%08x-%08x-%08x", cnc_ids[0], cnc_ids[1], cnc_ids[2], cnc_ids[3])
 		(*b)["id"] = value
 
-		*c = append(*c, Update{value})
+		*c = append(*c, Update{"id", value})
 
 		return nil
 	}
@@ -61,16 +87,16 @@ func read_parameter(libh C.ushort, key string, num int) sig {
 		}
 		last := (*a)[key]
 		switch last.(type) {
-		case *C.long:
+		case C.long:
 			value := *(*C.long)(unsafe.Pointer(&param.u))
 			if last != value {
 				(*b)[key] = value
-				*c = append(*c, Update{value})
+				*c = append(*c, Update{key, value})
 			}
 		default:
 			value := param.u
 			(*b)[key] = value
-			*c = append(*c, Update{value})
+			*c = append(*c, Update{key, value})
 		}
 		return nil
 	}
@@ -89,6 +115,7 @@ type machine_info struct {
 func read_machine_info(libh C.ushort) sig {
 	return func(a *map[string]interface{}, b *map[string]interface{}, c *[]Update) error {
 		// on x64 linux, ulongs are typically 64 bits not the 32 that fwlib expects
+		const key = "info"
 		var sysinfo C.ODBSYS
 		if ret := C.cnc_sysinfo(libh, &sysinfo); ret != C.EW_OK {
 			log.Fatalf("cnc_sysinfo failed (%d)\n", ret)
@@ -103,8 +130,8 @@ func read_machine_info(libh C.ushort) sig {
 			C.GoStringN(&sysinfo.version[0], 4),
 			C.GoStringN(&sysinfo.axes[0], 2),
 		}
-		(*b)["info"] = value
-		*c = append(*c, Update{value})
+		(*b)[key] = value
+		*c = append(*c, Update{key, value})
 
 		return nil
 	}
@@ -113,6 +140,7 @@ func read_machine_info(libh C.ushort) sig {
 
 func read_axis_names(libh C.ushort) sig {
 	return func(a *map[string]interface{}, b *map[string]interface{}, c *[]Update) error {
+		const key = "axis_names"
 		var axes [C.MAX_AXIS]C.ODBAXISNAME
 		var cnt C.short = C.MAX_AXIS
 		if ret := C.cnc_rdaxisname(libh, &cnt, (*C.ODBAXISNAME)(unsafe.Pointer(&axes))); ret != C.EW_OK {
@@ -124,8 +152,8 @@ func read_axis_names(libh C.ushort) sig {
 			s := C.GoString(&axes[i].name)
 			value[i] = s
 		}
-		(*b)["axis_names"] = value
-		*c = append(*c, Update{value})
+		(*b)[key] = value
+		*c = append(*c, Update{key, value})
 
 		return nil
 	}
@@ -175,6 +203,7 @@ func read_program_contents(libh C.ushort) sig {
 func read_status(libh C.ushort) sig {
 	return func(a *map[string]interface{}, b *map[string]interface{}, c *[]Update) error {
 		var odbst C.ODBST
+		const key = "raw_status"
 		if ret := C.cnc_statinfo(libh, &odbst); ret != C.EW_OK {
 			return errors.New(fmt.Sprintf("cnc_statinfo failed (%d)", ret))
 		}
@@ -190,8 +219,8 @@ func read_status(libh C.ushort) sig {
 			int(odbst.tmmode),
 		}
 
-		(*b)["raw_status"] = value
-		*c = append(*c, Update{value})
+		(*b)[key] = value
+		*c = append(*c, Update{key, value})
 
 		return nil
 	}
@@ -224,13 +253,14 @@ func get_execution(s raw_status) string {
 func read_exection(libh C.ushort) sig {
 	return func(a *map[string]interface{}, b *map[string]interface{}, c *[]Update) error {
 		var last string
+		const key = "execution"
 		if val, ok := (*a)["raw_status"]; ok {
 			last = get_execution(val.(raw_status))
 		}
 		value := get_execution((*b)["raw_status"].(raw_status))
 		if last != value {
-			(*b)["execution"] = value
-			*c = append(*c, Update{value})
+			(*b)[key] = value
+			*c = append(*c, Update{key, value})
 		}
 
 		return nil
@@ -255,6 +285,18 @@ func get_emergency(s raw_status) string {
 	}
 }
 
+func read_dynamic(libh C.ushort) sig {
+	return func(a *map[string]interface{}, b *map[string]interface{}, c *[]Update) error {
+		var dyn C.ODBDY2_T
+
+		if ret := C.cnc_rddynamic2(libh, C.ALL_AXES, C.sizeof_ODBDY2_T, (*C.ODBDY2)(unsafe.Pointer(&dyn))); ret != C.EW_OK {
+			return errors.New(fmt.Sprintf("cnc_rddynamic2 failed (%d)", ret))
+		}
+
+		return nil
+	}
+}
+
 func main() {
 	var libh C.ushort
 
@@ -275,17 +317,34 @@ func main() {
 	// read config
 	// loop on interval
 
-	fmt.Printf("\nexecution: %+v\n", get_execution(rs))
-	fmt.Printf("mode:      %+v\n", get_mode(rs))
-	fmt.Printf("emergency: %+v\n", get_emergency(rs))
-
 	const PART_COUNT_PARAMETER = 6711
-	var param C.iodbpsd_t
-	if ret := C.cnc_rdparam(libh, PART_COUNT_PARAMETER, C.ALL_AXES, 8, (*C.IODBPSD)(unsafe.Pointer(&param))); ret != C.EW_OK {
-		log.Fatalf("cnc_rdparam failed (%d)\n", ret)
+
+	fns := []sig{
+		read_id(libh),
+		read_parameter(libh, "part_count", PART_COUNT_PARAMETER),
+		read_machine_info(libh),
+		read_axis_names(libh),
+		read_status(libh),
 	}
-	part_count := *(*C.long)(unsafe.Pointer(&param.u))
-	fmt.Printf("\npart_count: %+v\n", part_count)
+
+	a := make(map[string]interface{})
+	a["part_count"] = (C.long)(0)
+	b := make(map[string]interface{})
+	var c []Update
+
+	for _, each := range fns {
+		each(&a, &b, &c)
+	}
+	a = b
+	b = make(map[string]interface{})
+	c = c[:0]
+	for _, each := range fns {
+		each(&a, &b, &c)
+	}
+
+	fmt.Printf("a: %+v\n", a)
+	fmt.Printf("b: %+v\n", b)
+	fmt.Printf("c: %+v\n", c)
 
 	if ret := C.cnc_freelibhndl(libh); ret != C.EW_OK {
 		log.Fatalf("cnc_freelibhndl failed (%d)\n", ret)
