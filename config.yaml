@@ -1,0 +1,16 @@
+kafka:
+  bootstrap_servers: "localhost:9092"
+  group_id: testing
+  topic: input
+
+machine_id: example
+machine_port: 8193
+
+interval: 1.0
+
+driver:
+  values:
+    - raw_status
+    - execution
+    - mode
+    - emergency
