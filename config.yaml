@@ -1,0 +1,3 @@
+machine:
+  ip: localhost
+  port: 8193
